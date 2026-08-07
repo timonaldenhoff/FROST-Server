@@ -53,6 +53,11 @@ abstract class FineGrainedAuthTestsBasic extends FineGrainedAuthTests {
 
     static {
         FineGrainedAuthTests.addCommonProperties(SERVER_PROPERTIES);
+        // This variant runs the exact same tests, but with a SecurityWrapperJoin that
+        // has extraSelfJoinFields configured. The visible data must be identical. The
+        // other FineGrainedAuth variants keep testing the default configuration.
+        SERVER_PROPERTIES.computeIfPresent("plugins.modelLoader.securityFiles",
+                (key, files) -> files.replace("secObservations.json", "secObservationsExtraSelfJoin.json"));
         SERVER_PROPERTIES.put("auth.provider", "de.fraunhofer.iosb.ilt.frostserver.auth.basic.BasicAuthProvider");
         SERVER_PROPERTIES.put("auth.authenticateOnly", "true");
         SERVER_PROPERTIES.put("auth.allowAnonymousRead", "false");

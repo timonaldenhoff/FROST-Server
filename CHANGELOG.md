@@ -3,6 +3,11 @@
 ## Version 2.9.0-SNAPSHOT
 
 **New Features**
+* Added the option `extraSelfJoinFields` to SecurityWrapperJoin, listing extra columns
+  besides the primary key to correlate the generated EXISTS-subquery on. On partitioned
+  tables, like TimescaleDB hypertables, adding the partitioning column lets the database
+  exclude partitions inside the subquery instead of scanning the entire table. The listed
+  columns must be NOT NULL. Default is empty, keeping the generated SQL unchanged.
 
 **Internal changes & Bugfixes**
 
