@@ -40,7 +40,6 @@ import org.jooq.Field;
 import org.jooq.Record;
 import org.jooq.Record1;
 import org.jooq.SQL;
-import org.jooq.SelectConditionStep;
 import org.jooq.SelectJoinStep;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
@@ -136,61 +135,95 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
     @EditorString.EdOptsString()
     private List<String> extraSelfJoinFields;
 
+    @ConfigurableField(editor = EditorBoolean.class, optional = true,
+            label = "Self Join", description = "If true (default), the EXISTS-subquery joins the main table to itself as 't' and correlates on the primary key. "
+                    + "If false, the main table itself is aliassed to 't', and the first join (which must be INNER) becomes the correlation: "
+                    + "the main table is read only once. On a large partitioned table (for instance a TimescaleDB hypertable) the self join "
+                    + "makes the database scan all partitions; without it, partition exclusion and the indexes of the main table keep working.")
+    @EditorBoolean.EdOptsBool(dflt = true)
+    private boolean selfJoin = true;
+
     private int paramCount = -1;
 
     @Override
     public Table wrap(StaMainTable table, JooqPersistenceManager pm) {
         final Principal principal = PrincipalExtended.getLocalPrincipal();
+        if (!selfJoin) {
+            return wrapWithoutSelfJoin(table, principal);
+        }
         final StaMainTable tableIn = table.as("t");
         SelectJoinStep<Record1<Integer>> exists = DSL.select(DSL.one()).from(tableIn);
         for (TableJoin join : joins) {
-            SQL joinPart;
-            if (join.usernameParameter) {
-                joinPart = DSL.sql(join.joinOnSql, principal.getName());
-            } else if (join.groupSetParameter) {
-                final String[] groups;
-                groups = ((PrincipalExtended) principal).getRoles().toArray(String[]::new);
-                joinPart = DSL.sql(join.joinOnSql, (Object) groups);
-            } else {
-                joinPart = DSL.sql(join.joinOnSql);
-            }
-            switch (join.joinType) {
-                case LEFT:
-                    exists = exists.leftJoin(join.getTargetTable()).on(joinPart);
-                    break;
-
-                case RIGHT:
-                    exists = exists.rightJoin(join.getTargetTable()).on(joinPart);
-                    break;
-
-                case INNER:
-                default:
-                    exists = exists.innerJoin(join.getTargetTable()).on(joinPart);
-                    break;
-            }
+            exists = addJoin(exists, join, principal);
         }
-        final Condition selfCorrelation = selfCorrelation(table, tableIn);
-        if (!StringHelper.isNullOrEmpty(where)) {
-            if (paramCount < 0) {
-                paramCount = StringUtils.countMatches(where, '?');
-            }
-            if (paramCount > 0) {
-                Object[] params = new Object[paramCount];
-                if (usernameParameter) {
-                    Arrays.fill(params, principal.getName());
-                } else if (groupSetParameter) {
-                    final String[] groups = ((PrincipalExtended) principal).getRoles().toArray(String[]::new);
-                    Arrays.fill(params, groups);
-                }
-                SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation).and(where, params);
-                return table.whereExists(finalExists).asTable("tOut");
-            }
-            SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation).and(where);
-            return table.whereExists(finalExists).asTable("tOut");
-        }
+        return table.whereExists(exists.where(withWhere(selfCorrelation(table, tableIn), principal))).asTable("tOut");
+    }
 
-        SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation);
-        return table.whereExists(finalExists).asTable("tOut");
+    /**
+     * Wrap without joining the main table to itself: the main table becomes
+     * 't', the EXISTS-subquery starts at the first join target, and the SQL of
+     * the first join correlates it with the outer row. This gives the same rows
+     * as the self join, since an INNER first join only keeps rows of 't' that
+     * match, and the self join correlates each row only with itself.
+     */
+    private Table wrapWithoutSelfJoin(StaMainTable table, Principal principal) {
+        if (joins == null || joins.isEmpty() || joins.get(0).joinType != TableJoin.JoinType.INNER) {
+            throw new IllegalArgumentException("selfJoin=false requires an INNER first join that references the main table as 't'");
+        }
+        final StaMainTable tableOut = table.as("t");
+        final TableJoin first = joins.get(0);
+        SelectJoinStep<Record1<Integer>> exists = DSL.select(DSL.one()).from(first.getTargetTable());
+        for (TableJoin join : joins.subList(1, joins.size())) {
+            exists = addJoin(exists, join, principal);
+        }
+        final Condition correlation = DSL.condition(joinSql(first, principal));
+        return tableOut.whereExists(exists.where(withWhere(correlation, principal))).asTable("tOut");
+    }
+
+    private static SelectJoinStep<Record1<Integer>> addJoin(SelectJoinStep<Record1<Integer>> exists, TableJoin join, Principal principal) {
+        final SQL joinPart = joinSql(join, principal);
+        return switch (join.joinType) {
+            case LEFT ->
+                exists.leftJoin(join.getTargetTable()).on(joinPart);
+            case RIGHT ->
+                exists.rightJoin(join.getTargetTable()).on(joinPart);
+            default ->
+                exists.innerJoin(join.getTargetTable()).on(joinPart);
+        };
+    }
+
+    private static SQL joinSql(TableJoin join, Principal principal) {
+        if (join.usernameParameter) {
+            return DSL.sql(join.joinOnSql, principal.getName());
+        }
+        if (join.groupSetParameter) {
+            final String[] groups = ((PrincipalExtended) principal).getRoles().toArray(String[]::new);
+            return DSL.sql(join.joinOnSql, (Object) groups);
+        }
+        return DSL.sql(join.joinOnSql);
+    }
+
+    /**
+     * Adds the configured where, with its parameters, to the given condition.
+     */
+    private Condition withWhere(Condition condition, Principal principal) {
+        if (StringHelper.isNullOrEmpty(where)) {
+            return condition;
+        }
+        if (paramCount < 0) {
+            paramCount = StringUtils.countMatches(where, '?');
+        }
+        if (paramCount == 0) {
+            return condition.and(where);
+        }
+        Object[] params = new Object[paramCount];
+        if (usernameParameter) {
+            Arrays.fill(params, principal.getName());
+        } else if (groupSetParameter) {
+            final String[] groups = ((PrincipalExtended) principal).getRoles().toArray(String[]::new);
+            Arrays.fill(params, groups);
+        }
+        return condition.and(where, params);
     }
 
     /**
@@ -277,6 +310,15 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
 
     public SecurityWrapperJoin setExtraSelfJoinFields(List<String> extraSelfJoinFields) {
         this.extraSelfJoinFields = extraSelfJoinFields;
+        return this;
+    }
+
+    public boolean isSelfJoin() {
+        return selfJoin;
+    }
+
+    public SecurityWrapperJoin setSelfJoin(boolean selfJoin) {
+        this.selfJoin = selfJoin;
         return this;
     }
 
