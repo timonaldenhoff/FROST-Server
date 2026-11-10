@@ -26,3 +26,4 @@ Tools/ModelExtractor/examples
 .vscode/
 .lck
 *.bkp
+.mcp.json

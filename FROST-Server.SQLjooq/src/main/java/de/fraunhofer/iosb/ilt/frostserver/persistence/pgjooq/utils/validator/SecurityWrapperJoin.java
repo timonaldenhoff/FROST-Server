@@ -35,6 +35,8 @@ import java.security.Principal;
 import java.util.Arrays;
 import java.util.List;
 import org.apache.commons.lang3.StringUtils;
+import org.jooq.Condition;
+import org.jooq.Field;
 import org.jooq.Record;
 import org.jooq.Record1;
 import org.jooq.SQL;
@@ -125,6 +127,15 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
     @EditorBoolean.EdOptsBool()
     private boolean groupSetParameter;
 
+    @ConfigurableField(editor = EditorList.class, optional = true,
+            label = "Extra Self Join Fields", description = "Extra columns, besides the primary key, to correlate the EXISTS-subquery on. "
+                    + "On a partitioned table (for instance a TimescaleDB hypertable) listing the partitioning column here lets the database "
+                    + "exclude partitions inside the subquery too. The listed columns must be NOT NULL, since NULL = NULL is not true, and "
+                    + "rows with a NULL in such a column would become invisible.")
+    @EditorList.EdOptsList(editor = EditorString.class)
+    @EditorString.EdOptsString()
+    private List<String> extraSelfJoinFields;
+
     private int paramCount = -1;
 
     @Override
@@ -158,6 +169,7 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
                     break;
             }
         }
+        final Condition selfCorrelation = selfCorrelation(table, tableIn);
         if (!StringHelper.isNullOrEmpty(where)) {
             if (paramCount < 0) {
                 paramCount = StringUtils.countMatches(where, '?');
@@ -170,15 +182,57 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
                     final String[] groups = ((PrincipalExtended) principal).getRoles().toArray(String[]::new);
                     Arrays.fill(params, groups);
                 }
-                SelectConditionStep<Record1<Integer>> finalExists = exists.where(table.joinSelf(tableIn)).and(where, params);
+                SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation).and(where, params);
                 return table.whereExists(finalExists).asTable("tOut");
             }
-            SelectConditionStep<Record1<Integer>> finalExists = exists.where(table.joinSelf(tableIn)).and(where);
+            SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation).and(where);
             return table.whereExists(finalExists).asTable("tOut");
         }
 
-        SelectConditionStep<Record1<Integer>> finalExists = exists.where(table.joinSelf(tableIn));
+        SelectConditionStep<Record1<Integer>> finalExists = exists.where(selfCorrelation);
         return table.whereExists(finalExists).asTable("tOut");
+    }
+
+    /**
+     * The condition correlating the EXISTS-subquery with the outer table: the
+     * primary key, plus any configured extraSelfJoinFields.
+     *
+     * @param table The outer table.
+     * @param tableIn The same table, aliassed to 't', inside the subquery.
+     * @return The correlation condition.
+     */
+    private Condition selfCorrelation(StaMainTable table, StaMainTable tableIn) {
+        Condition correlation = table.joinSelf(tableIn);
+        if (extraSelfJoinFields == null) {
+            return correlation;
+        }
+        for (String fieldName : extraSelfJoinFields) {
+            correlation = correlation.and(findField(table, fieldName).eq(findField(tableIn, fieldName)));
+        }
+        return correlation;
+    }
+
+    /**
+     * Find the field with the given name on the given table. Falls back to a
+     * case-insensitive match, since the column naming convention differs
+     * between deployments.
+     *
+     * @param table The table to find the field on.
+     * @param fieldName The name of the field to find.
+     * @return The field, never null.
+     * @throws IllegalArgumentException if the table has no such field.
+     */
+    private static Field findField(Table<?> table, String fieldName) {
+        final Field exact = table.field(fieldName);
+        if (exact != null) {
+            return exact;
+        }
+        for (Field candidate : table.fields()) {
+            if (candidate.getName().equalsIgnoreCase(fieldName)) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException("extraSelfJoinFields: table " + table.getName() + " has no column named '" + fieldName + "'");
     }
 
     public List<TableJoin> getJoins() {
@@ -214,6 +268,15 @@ public class SecurityWrapperJoin implements SecurityTableWrapper {
 
     public SecurityWrapperJoin setGroupSetParameter(boolean groupSetParameter) {
         this.groupSetParameter = groupSetParameter;
+        return this;
+    }
+
+    public List<String> getExtraSelfJoinFields() {
+        return extraSelfJoinFields;
+    }
+
+    public SecurityWrapperJoin setExtraSelfJoinFields(List<String> extraSelfJoinFields) {
+        this.extraSelfJoinFields = extraSelfJoinFields;
         return this;
     }
 

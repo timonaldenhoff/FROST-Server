@@ -7,6 +7,11 @@
 * [ModelOM] Added time attribute to MonitoringProgram and MonitoringActivity.
 * [ModelOM] Added LinkingTime EntityType between Thing and Network.
 * Introduced [entityType][create/update/delete] roles for the fine-grained auth system.
+* Added the option `extraSelfJoinFields` to SecurityWrapperJoin, listing extra columns
+  besides the primary key to correlate the generated EXISTS-subquery on. On partitioned
+  tables, like TimescaleDB hypertables, adding the partitioning column lets the database
+  exclude partitions inside the subquery instead of scanning the entire table. The listed
+  columns must be NOT NULL. Default is empty, keeping the generated SQL unchanged.
 
 **Internal changes & Bugfixes**
 * Fixed namespaces with only property types not being registered.
