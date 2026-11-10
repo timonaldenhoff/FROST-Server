@@ -100,4 +100,21 @@
         </createIndex>
     </changeSet>
 
+    <!--
+        Serves the most common access pattern: the Observations of one Datastream ordered by
+        phenomenonTime, e.g. the latest value ($orderby=phenomenonTime desc&$top=1) and time
+        ranges. On a TimescaleDB hypertable partitioned by PHENOMENON_TIME_START it lets the
+        ordered scan stop in the newest chunk instead of visiting all chunks.
+        Databases that already have the index under this name only mark the change set as run.
+    -->
+    <changeSet author="eotlab" id="2026-11-10-Index-OBS-DS_PTSTART_DESC_ID_DESC" objectQuotingStrategy="QUOTE_ALL_OBJECTS">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="OBS-DS_PTSTART_DESC_ID_DESC" />
+            </not>
+        </preConditions>
+        <!-- Plain SQL: the 3.1 schema of this file has no descending index columns. -->
+        <sql dbms="postgresql">CREATE INDEX "OBS-DS_PTSTART_DESC_ID_DESC" ON "OBSERVATIONS" ("DATASTREAM_ID", "PHENOMENON_TIME_START" DESC, "ID" DESC)</sql>
+    </changeSet>
+
 </databaseChangeLog>

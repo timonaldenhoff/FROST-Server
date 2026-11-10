@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import de.fraunhofer.iosb.ilt.frostserver.persistence.pgjooq.utils.validator.SecurityWrapperJoin;
 import de.fraunhofer.iosb.ilt.frostserver.persistence.pgjooq.utils.validator.SecurityWrapperJoin.TableJoin;
 import java.util.List;
+import org.apache.commons.lang3.StringUtils;
 import org.jooq.SQLDialect;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
@@ -42,16 +43,52 @@ class SecurityWrapperJoinTest {
     private static final String CORRELATION_PHTIME = "\"OBSERVATIONS\".\"PHENOMENON_TIME_START\" = \"t\".\"PHENOMENON_TIME_START\"";
 
     private static String wrapAndRender(List<String> extraSelfJoinFields) {
+        return render(new SecurityWrapperJoin()
+                .setJoins(List.of(datastreamJoin(), thingJoin()))
+                .setWhere("not ds.\"restricted\"")
+                .setExtraSelfJoinFields(extraSelfJoinFields));
+    }
+
+    private static TableJoin datastreamJoin() {
         final TableJoin join = new TableJoin();
         join.targetTable = "DATASTREAMS";
         join.targetAlias = "ds";
         join.joinOnSql = "t.\"DATASTREAM_ID\" = ds.\"ID\"";
-        final SecurityWrapperJoin wrapper = new SecurityWrapperJoin()
-                .setJoins(List.of(join))
-                .setWhere("not ds.\"restricted\"")
-                .setExtraSelfJoinFields(extraSelfJoinFields);
+        return join;
+    }
+
+    private static TableJoin thingJoin() {
+        final TableJoin join = new TableJoin();
+        join.targetTable = "THINGS";
+        join.targetAlias = "th";
+        join.joinOnSql = "ds.\"THING_ID\" = th.\"ID\"";
+        join.joinType = TableJoin.JoinType.LEFT;
+        return join;
+    }
+
+    private static String render(SecurityWrapperJoin wrapper) {
         final Table<?> wrapped = wrapper.wrap(new TableImpObservations(SQLDataType.BIGINT, SQLDataType.BIGINT, SQLDataType.BIGINT, null), null);
         return DSL.using(SQLDialect.POSTGRES).renderInlined(DSL.selectOne().from(wrapped));
+    }
+
+    @Test
+    void testWithoutSelfJoinReadsMainTableOnce() {
+        final String sql = render(new SecurityWrapperJoin()
+                .setJoins(List.of(datastreamJoin(), thingJoin()))
+                .setWhere("not ds.\"restricted\"")
+                .setSelfJoin(false));
+        assertEquals(1, StringUtils.countMatches(sql, "\"OBSERVATIONS\""), sql);
+        assertTrue(sql.contains("from \"OBSERVATIONS\" as \"t\" where exists (select 1 from \"DATASTREAMS\" as \"ds\" left outer join \"THINGS\" as \"th\""), sql);
+        assertTrue(sql.contains("where ((t.\"DATASTREAM_ID\" = ds.\"ID\") and (not ds.\"restricted\"))"), sql);
+        assertFalse(sql.contains(CORRELATION_PK), sql);
+    }
+
+    @Test
+    void testWithoutSelfJoinNeedsInnerFirstJoin() {
+        final SecurityWrapperJoin wrapper = new SecurityWrapperJoin()
+                .setJoins(List.of(thingJoin()))
+                .setSelfJoin(false);
+        assertThrows(IllegalArgumentException.class, () -> render(wrapper));
     }
 
     @Test

@@ -147,7 +147,8 @@
                   }
                 ],
                 "where": "(pr.\"ISPUBLIC\" and not ds.\"RESTRICTED\" and not th.\"RESTRICTED\") or u.\"USER_NAME\" \u003d ?",
-                "usernameParameter": true
+                "usernameParameter": true,
+                "selfJoin": false
               }
             }
           ]

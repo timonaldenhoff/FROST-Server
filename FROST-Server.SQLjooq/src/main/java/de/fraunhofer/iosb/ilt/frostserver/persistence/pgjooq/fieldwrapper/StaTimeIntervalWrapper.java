@@ -167,7 +167,10 @@ public class StaTimeIntervalWrapper implements TimeFieldWrapper {
                 return e1.lessOrEqual(t2).and(s1.lessThan(t2));
 
             case "<=":
-                return e1.lessOrEqual(t2);
+                // start <= end always holds, so the start condition does not change
+                // the result. It lets the database prune partitions on the start
+                // column (e.g. TimescaleDB chunks partitioned by phenomenonTime).
+                return e1.lessOrEqual(t2).and(s1.lessOrEqual(t2));
 
             case "a":
                 return s1.greaterThan(t2);
